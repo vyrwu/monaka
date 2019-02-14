@@ -4,7 +4,7 @@
   <groupId>com.jametson</groupId>
   <artifactId>monaka</artifactId>
   <packaging>jar</packaging>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1-SNAPSHOT</version>
   
   <name>monaka</name>
   <url>http://maven.apache.org</url>
@@ -13,7 +13,7 @@
   </description>
   
   <properties>
-      <confluent.version>3.1.0</confluent.version>
+      <confluent.version>5.1.1</confluent.version>
       <kafka.version>0.10.1.0</kafka.version>
       <junit.version>4.12</junit.version>
       <hadoop.version>2.6.1</hadoop.version>
@@ -28,9 +28,14 @@
         <name>Confluent</name>
         <url>${confluent.maven.repo}</url>
     </repository>
-  </repositories>
+</repositories>
     
   <dependencies>
+    <dependency>
+        <groupId>io.confluent</groupId>
+        <artifactId>kafka-connect-storage-common</artifactId>
+        <version>${confluent.version}</version>
+    </dependency>
   	<dependency>
       <groupId>joda-time</groupId>
       <artifactId>joda-time</artifactId>
@@ -58,7 +63,7 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
-  
+
   <build>
         <plugins>
             <plugin>

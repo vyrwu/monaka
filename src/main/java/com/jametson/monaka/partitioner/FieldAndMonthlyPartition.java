@@ -1,9 +1,10 @@
 package com.jametson.monaka.partitioner;
 
-import io.confluent.connect.hdfs.errors.PartitionException;
-import io.confluent.connect.hdfs.partitioner.FieldPartitioner;
-import org.apache.hadoop.hive.metastore.api.FieldSchema;
-import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoFactory;
+import io.confluent.connect.storage.common.StorageCommonConfig;
+import io.confluent.connect.storage.errors.PartitionException;
+import io.confluent.connect.storage.partitioner.DefaultPartitioner;
+import io.confluent.connect.storage.partitioner.PartitionerConfig;
+import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.errors.ConnectException;
@@ -14,57 +15,81 @@ import org.slf4j.LoggerFactory;
 
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-public class FieldAndMonthlyPartition extends FieldPartitioner {
-    private static final Logger log = LoggerFactory.getLogger(FieldPartitioner.class);
+public class FieldAndMonthlyPartition<T> extends DefaultPartitioner<T> {
+    private static final Logger log = LoggerFactory.getLogger(FieldAndMonthlyPartition.class);
     private static final DateFormat df = new SimpleDateFormat("MM-yyyy");
-    private static String fieldName, timeFieldName;
-    private ArrayList<FieldSchema> partitionFields = new ArrayList<>();
+    private List<String> fieldNames;
+    private String timeFieldName;
 
+    @SuppressWarnings("unchecked")
+    @Override
     public void configure(Map<String, Object> config) {
-        fieldName = (String)config.get("partition.field.name");
-        timeFieldName = System.getProperty("partition.time.field.name", "");
-        partitionFields.add(new FieldSchema(fieldName, TypeInfoFactory.stringTypeInfo.toString(), ""));
+        fieldNames = (List<String>)config.get(PartitionerConfig.PARTITION_FIELD_NAME_CONFIG);
+        timeFieldName = (String)config.get(PartitionerConfig.TIMESTAMP_FIELD_NAME_CONFIG);
+        delim = (String)config.get(StorageCommonConfig.DIRECTORY_DELIM_CONFIG);
     }
 
+    @Override
     public String encodePartition(SinkRecord sinkRecord) {
-        String fieldKey = switchByField(sinkRecord);
+        String fieldKey = switchByFields(sinkRecord);
         String timeKey = switchByMonth(sinkRecord);
-        return fieldKey + "/" + timeKey;
+        return fieldKey + timeKey;
     }
 
-    private String switchByField(SinkRecord sinkRecord) {
+    @Override
+    public String generatePartitionedPath(String topic, String encodedPartition) {
+        return topic + this.delim + encodedPartition;
+    }
+
+    @Override
+    public List<T> partitionFields() {
+        if (partitionFields == null) {
+            partitionFields = newSchemaGenerator(config).newPartitionFields(
+                    Utils.join(fieldNames, ",")
+            );
+        }
+        return partitionFields;
+    }
+
+    private String switchByFields(SinkRecord sinkRecord) {
         Object value = sinkRecord.value();
-        Schema valueSchema = sinkRecord.valueSchema();
         if (value instanceof Struct) {
-            boolean includeFieldName = System.getProperty("partition.include.field.name", "false").toLowerCase().equals("true");
-            String pathFormat = "";
-            if (includeFieldName) {
-                pathFormat = fieldName + "=";
+            final Schema valueSchema = sinkRecord.valueSchema();
+            final Struct struct = (Struct) value;
+
+            StringBuilder builder = new StringBuilder();
+            for (String fieldName : fieldNames) {
+                if (builder.length() > 0) {
+                    builder.append(this.delim);
+                }
+
+                Object partitionKey = struct.get(fieldName);
+                Schema.Type type = valueSchema.field(fieldName).schema().type();
+                switch (type) {
+                    case INT8:
+                    case INT16:
+                    case INT32:
+                    case INT64:
+                        Number record = (Number) partitionKey;
+                        builder.append(record.toString());
+                        break;
+                    case STRING:
+                        builder.append((String) partitionKey);
+                        break;
+                    case BOOLEAN:
+                        boolean booleanRecord = (boolean) partitionKey;
+                        builder.append(Boolean.toString(booleanRecord));
+                        break;
+                    default:
+                        log.error("Type {} is not supported as a partition key.", type.getName());
+                        throw new io.confluent.connect.storage.errors.PartitionException("Error encoding partition.");
+                }
             }
-            Struct struct = (Struct)value;
-            Object fieldKey = struct.get(fieldName);
-            Schema.Type type = valueSchema.field(fieldName).schema().type();
-            switch(type) {
-                case INT8:
-                case INT16:
-                case INT32:
-                case INT64:
-                    Number record = (Number)fieldKey;
-                    return pathFormat + record.toString();
-                case STRING:
-                    return pathFormat + (String)fieldKey;
-                case BOOLEAN:
-                    boolean booleanRecord = (Boolean)fieldKey;
-                    return pathFormat + Boolean.toString(booleanRecord);
-                default:
-                    log.error("Type {} is not supported as a partition key.", type.getName());
-                    throw new PartitionException("Error encoding partition.");
-            }
+            return builder.toString();
         } else {
             log.error("Value is not Struct type.");
             throw new PartitionException("Error encoding partition.");
@@ -74,6 +99,7 @@ public class FieldAndMonthlyPartition extends FieldPartitioner {
     private String switchByMonth(SinkRecord sinkRecord) {
         long timestamp;
 
+        // use timestamp from SinkRecord
         if (timeFieldName.equals("")) {
             timestamp = System.currentTimeMillis();
         } else {
@@ -86,13 +112,5 @@ public class FieldAndMonthlyPartition extends FieldPartitioner {
         }
         Date date = new Date(timestamp);
         return df.format(date);
-    }
-
-    public String generatePartitionedPath(String topic, String encodedPartition) {
-        return topic + "/" + encodedPartition;
-    }
-
-    public List<FieldSchema> partitionFields() {
-        return this.partitionFields;
     }
 }
